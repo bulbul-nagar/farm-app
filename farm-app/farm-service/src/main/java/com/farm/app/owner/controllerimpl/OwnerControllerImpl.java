@@ -5,9 +5,12 @@ import com.farm.app.owner.dto.OwnerDto;
 import com.farm.app.owner.service.OwnerService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+
+@CrossOrigin("*")
 @RestController
 public class OwnerControllerImpl implements OwnerController {
 

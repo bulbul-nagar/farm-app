@@ -2,6 +2,8 @@ package com.farm.app.booking.service;
 
 import com.farm.app.booking.dto.BookingDto;
 
+import java.util.List;
+
 public interface BookingService {
     BookingDto save(BookingDto bookingDto);
 
@@ -9,4 +11,5 @@ public interface BookingService {
 
     void delete(int id);
 
+    List<BookingDto> getAllBooking();
 }

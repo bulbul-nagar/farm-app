@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FarmShare Rental Hub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Custom styles */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Ensure the icons render correctly after the script runs */
+        .lucide {
+            display: inline-block;
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-50 flex flex-col">
+
+    <header class="bg-green-700 shadow-md sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-white flex items-center cursor-pointer" onclick="handleNavigate('Home')">
+                <i data-lucide="truck" class="w-6 h-6 mr-2"></i>
+                FarmShare Rental Hub
+            </h1>
+            <nav id="navbar" class="space-x-4 flex items-center">
+                </nav>
+        </div>
+    </header>
+
+    <div id="hero-section" class="bg-green-600 text-white py-16 hidden transition-all duration-300">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <h2 class="text-4xl font-extrabold mb-4">Empowering Farmers through Shared Equipment</h2>
+            <p class="text-xl opacity-90 max-w-2xl mx-auto mb-8">Rent top-quality farm machinery or list your own equipment to earn extra income. Connecting communities for a better harvest.</p>
+            <button onclick="handleNavigate('EquipmentList')" class="bg-white text-green-700 font-bold py-2 px-6 rounded-full hover:bg-gray-100 transition duration-300">
+                Browse Equipment
+            </button>
+        </div>
+    </div>
+
+    <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 flex-grow w-full">
+        </main>
+    
+    <footer class="py-6 text-center text-sm text-gray-500 bg-gray-100 mt-auto border-t border-gray-200">
+        <p>Connected to Backend API at <code>http://localhost:8080/</code></p>
+    </footer>
+
+    <script>
+        // Initialize Lucide Icons
+        lucide.createIcons();
+    </script>
+
+    <script>
+        // --- CONFIGURATION ---
+        const API_BASE_URL = 'http://localhost:8080';
+
+        // --- PERSISTENCE: Restore User from Local Storage ---
+        const savedUserJSON = localStorage.getItem('farmAppUser');
+        const savedUser = savedUserJSON ? JSON.parse(savedUserJSON) : null;
+
+        // --- GLOBAL STATE ---
+        let state = {
+            equipment: [],
+            reservations: [],
+            users: {
+                renters: [],
+                owners: [],
+                admins: [{ id: 999, email: "root@farm.com", password: "root", name: "System Admin", role: "admin" }]
+            },
+            currentUser: savedUser, // Initialize with saved user if exists
+            currentPage: savedUser ? 'Home' : 'LandingPage', // Go to Home if logged in, else Landing
+            pageProps: {},
+            loading: false
+        };
+
+        // --- DOM ELEMENTS ---
+        const mainContent = document.getElementById('main-content');
+        const navbar = document.getElementById('navbar');
+        const heroSection = document.getElementById('hero-section');
+
+        // --- UTILITIES ---
+
+        const createElement = (tag, className = '', innerHTML = '') => {
+            const el = document.createElement(tag);
+            el.className = className;
+            if (innerHTML) el.innerHTML = innerHTML;
+            return el;
+        };
+
+        const formatCurrency = (amount) => {
+            return (amount / 100).toFixed(2);
+        };
+
+        const handleNavigate = (page, props = {}) => {
+            // Redirect logic for "Home" button click
+            if (page === 'Home') {
+                if (!state.currentUser) {
+                    page = 'LandingPage'; // Public Home
+                } else {
+                    // Role-Specific Home Pages
+                    switch (state.currentUser.role) {
+                        case 'owner':
+                            page = 'OwnerDashboard';
+                            break;
+                        case 'admin':
+                            page = 'AdminPanel';
+                            break;
+                        case 'renter':
+                            page = 'EquipmentList';
+                            break;
+                        default:
+                            page = 'EquipmentList';
+                    }
+                }
+            }
+
+            state.currentPage = page;
+            state.pageProps = props;
+            
+            // --- ACCESS CONTROL ---
+            if (page === 'Reservations' && !state.currentUser) {
+                 handleNavigate('Login', { message: "Please login to view reservations." });
+                 return;
+            }
+
+            if (page === 'OwnerDashboard') {
+                if (!state.currentUser || state.currentUser.role !== 'owner') {
+                    alert("Access Denied: Only Equipment Owners can manage requests.");
+                    handleNavigate('Home');
+                    return;
+                }
+            }
+
+            if (page === 'AddItem') {
+                if (!state.currentUser) {
+                    handleNavigate('Login', { message: "Please login to list items." });
+                    return;
+                }
+                if (state.currentUser.role !== 'owner') {
+                    alert("Access Denied: Only Equipment Owners can list items.");
+                    handleNavigate('Home');
+                    return;
+                }
+            }
+
+            if (page === 'AdminPanel') {
+                if (!state.currentUser || state.currentUser.role !== 'admin') {
+                    alert("Access Denied: System Administrator privileges required.");
+                    handleNavigate('Home');
+                    return;
+                }
+            }
+
+            // --- DATA FETCHING ---
+            if (page === 'Reservations' || page === 'OwnerDashboard' || page === 'OwnerRequests') {
+                // Ensure we have both equipment (for names) and bookings
+                Promise.all([fetchEquipment(false), fetchBookings(), fetchRenters()]).then(() => render());
+            } else if (page === 'AdminPanel') {
+                Promise.all([fetchEquipment(false), fetchRenters(), fetchOwners()]).then(() => {
+                    render();
+                });
+            } else if (page === 'EquipmentList' || page === 'LandingPage') {
+                fetchEquipment();
+            } else {
+                render();
+            }
+        };
+
+        const handleLogout = () => {
+            state.currentUser = null;
+            state.reservations = [];
+            handleNavigate('Home'); 
+        };
+
+        // --- API INTEGRATION ---
+
+        const loginUser = async (email, password, role) => {
+            // Note: Since the backend does not have a /login endpoint, 
+            // we fetch all users of the specific role and check credentials client-side.
+            state.loading = true;
+            render();
+            
+            try {
+                let users = [];
+                if (role === 'admin') {
+                     // Check hardcoded admin
+                     const admin = state.users.admins.find(u => u.email === email && u.password === password);
+                     if(admin) return admin;
+                     throw new Error("Invalid admin credentials");
+                }
+
+                let endpoint = role === 'renter' ? '/renters' : '/owners';
+                const response = await fetch(`${API_BASE_URL}${endpoint}`);
+                
+                if (!response.ok) throw new Error("Failed to connect to server");
+                
+                users = await response.json();
+                
+                // Simple plain-text password check (Matched to backend DTO)
+                const user = users.find(u => u.email === email && u.password === password);
+                
+                if (user) {
+                    return { ...user, role };
+                } else {
+                    throw new Error("Invalid credentials");
+                }
+            } catch (error) {
+                console.error("Login Error:", error);
+                throw error;
+            } finally {
+                state.loading = false;
+                render();
+            }
+        };
+
+        const fetchEquipment = async (showLoading = true) => {
+            if (showLoading && state.currentPage !== 'AdminPanel') {
+                 state.loading = true;
+                 render();
+            }
+            try {
+                const response = await fetch(`${API_BASE_URL}/equipments`);
+                if (response.ok) {
+                    state.equipment = await response.json();
+                } else {
+                    console.error("Failed to fetch equipment");
+                }
+            } catch (error) {
+                console.error("Error fetching equipment:", error);
+            } finally {
+                if (showLoading) {
+                    state.loading = false;
+                    if(state.currentPage !== 'AdminPanel') render();
+                }
+            }
+        };
+
+        const fetchBookings = async () => {
+            // WARNING: The backend BookingControllerImpl currently returns 'null' for getAllBooking().
+            // This needs to be fixed in the backend to return a list.
+            try {
+                const response = await fetch(`${API_BASE_URL}/bookings`);
+                if (response.ok) {
+                    const data = await response.json();
+                    state.reservations = data || []; // Handle null response gracefully
+                }
+            } catch (error) {
+                console.error("Error fetching bookings:", error);
+                state.reservations = [];
+            }
+        };
+
+        const fetchRenters = async () => {
+            try {
+                const response = await fetch(`${API_BASE_URL}/renters`);
+                if (response.ok) state.users.renters = await response.json();
+            } catch (error) { console.error(error); }
+        };
+
+        const fetchOwners = async () => {
+            try {
+                const response = await fetch(`${API_BASE_URL}/owners`);
+                if (response.ok) state.users.owners = await response.json();
+            } catch (error) { console.error(error); }
+        };
+
+        const createEquipment = async (newEquipment) => {
+            const response = await fetch(`${API_BASE_URL}/equipment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newEquipment)
+            });
+            
+            if (!response.ok) {
+                const err = await response.text(); // Get server error if any
+                throw new Error(err || "Failed to create equipment");
+            }
+            
+            const createdItem = await response.json();
+            state.equipment.push(createdItem);
+            return createdItem;
+        };
+
+        const createReservation = async (newReservation) => {
+            const response = await fetch(`${API_BASE_URL}/booking`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newReservation)
+            });
+
+            if (!response.ok) throw new Error("Failed to create reservation");
+            
+            const createdReservation = await response.json();
+            state.reservations.push(createdReservation);
+            return createdReservation;
+        };
+
+        const updateReservationStatus = async (bookingId, newStatus) => {
+            // We need to fetch the specific booking first to get all fields, 
+            // as the PUT endpoint expects a full BookingDto
+            const bookingToUpdate = state.reservations.find(b => b.id === bookingId);
+            
+            if (!bookingToUpdate) throw new Error("Booking not found locally");
+
+            const payload = { ...bookingToUpdate, status: newStatus };
+
+            const response = await fetch(`${API_BASE_URL}/booking/${bookingId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) throw new Error("Failed to update status");
+            
+            // Refresh data to reflect changes (e.g. equipment status might change on backend)
+            await fetchBookings();
+            await fetchEquipment(false); 
+        };
+
+
+        // --- UI COMPONENTS ---
+
+        const renderButton = (text, onClick, primary = true, disabled = false, className = '') => {
+            const button = createElement('button', 
+                `px-4 py-2 font-medium rounded-lg transition-colors duration-200 flex items-center justify-center ${
+                primary
+                    ? 'bg-green-600 text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                } ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`,
+                text
+            );
+            button.onclick = onClick;
+            return button;
+        };
+
+        const renderCard = (title, iconName, contentElement) => {
+            const card = createElement('div', 'bg-white p-6 rounded-xl shadow-lg border border-gray-100 hover:shadow-xl transition-shadow duration-300');
+            
+            const header = createElement('div', 'flex items-center mb-4');
+            header.innerHTML = `<i data-lucide="${iconName}" class="w-6 h-6 text-green-600 mr-3"></i>`;
+            header.appendChild(createElement('h2', 'text-xl font-semibold text-gray-800', title));
+            
+            card.appendChild(header);
+            card.appendChild(contentElement);
+            return card;
+        };
+        
+        // --- VIEW: Login Page ---
+        const renderLoginPage = () => {
+            const container = createElement('div', 'max-w-md mx-auto');
+            const card = createElement('div', 'bg-white p-8 rounded-xl shadow-lg border border-gray-100');
+            const title = createElement('h2', 'text-2xl font-bold text-gray-800 mb-6 text-center', 'Welcome Back');
+            card.appendChild(title);
+
+            if (state.pageProps.message) {
+                const msg = createElement('div', 'bg-yellow-100 text-yellow-800 p-3 rounded mb-4 text-sm text-center', state.pageProps.message);
+                card.appendChild(msg);
+            }
+            
+            const errorMsg = createElement('div', 'hidden bg-red-100 text-red-700 p-3 rounded mb-4 text-sm text-center', '');
+            card.appendChild(errorMsg);
+
+            const roleContainer = createElement('div', 'flex mb-6 bg-gray-100 p-1 rounded-lg');
+            let selectedRole = 'renter'; 
+
+            const createRoleBtn = (role, label) => {
+                const btn = createElement('button', 'flex-1 py-2 rounded-md text-xs font-medium transition-all text-gray-500 hover:text-gray-700', label);
+                if (role === 'renter') btn.classList.add('bg-white', 'shadow', 'text-gray-800'); 
+                
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    selectedRole = role;
+                    Array.from(roleContainer.children).forEach(child => {
+                        child.className = 'flex-1 py-2 rounded-md text-xs font-medium transition-all text-gray-500 hover:text-gray-700';
+                    });
+                    btn.className = 'flex-1 py-2 rounded-md text-xs font-medium transition-all bg-white shadow text-gray-800';
+                    
+                    const emailInput = form.querySelector('input[name="email"]');
+                    const passInput = form.querySelector('input[name="password"]');
+                    // Reset inputs
+                    emailInput.value = ''; passInput.value = '';
+                };
+                return btn;
+            };
+
+            const renterBtn = createRoleBtn('renter', 'Renter');
+            const ownerBtn = createRoleBtn('owner', 'Owner');
+            const adminBtn = createRoleBtn('admin', 'Sys Admin');
+
+            roleContainer.appendChild(renterBtn);
+            roleContainer.appendChild(ownerBtn);
+            roleContainer.appendChild(adminBtn);
+            card.appendChild(roleContainer);
+
+            const form = createElement('form', 'space-y-4');
+            form.innerHTML = `
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                    <input type="email" name="email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                    <input type="password" name="password" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500">
+                </div>
+                <div id="login-actions" class="pt-2"></div>
+            `;
+            
+            const submitBtn = renderButton('Sign In', null, true, false, 'w-full');
+            form.querySelector('#login-actions').appendChild(submitBtn);
+
+            form.onsubmit = async (e) => {
+                e.preventDefault();
+                errorMsg.classList.add('hidden');
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = 'Signing In...';
+
+                const formData = new FormData(form);
+                try {
+                    const user = await loginUser(formData.get('email'), formData.get('password'), selectedRole);
+                    state.currentUser = user;
+                    // Redirect to role-specific home page
+                    handleNavigate('Home');
+                } catch (err) {
+                    errorMsg.textContent = err.message || "Login failed";
+                    errorMsg.classList.remove('hidden');
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = 'Sign In';
+                }
+            };
+
+            card.appendChild(form);
+            container.appendChild(card);
+            return container;
+        };
+
+        // --- VIEW 1: Equipment List ---
+
+        const renderEquipmentList = () => {
+            const container = createElement('div', 'space-y-6');
+            const header = createElement('div', 'flex justify-between items-center');
+            const pageTitle = state.currentUser && state.currentUser.role === 'renter' ? 'Browse Equipment' : 'Featured Equipment';
+            header.appendChild(createElement('h1', 'text-3xl font-bold text-gray-800', pageTitle));
+            container.appendChild(header);
+
+            const grid = createElement('div', 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6');
+            
+            state.equipment.forEach(item => {
+                const content = createElement('div');
+                content.appendChild(createElement('p', 'text-sm text-gray-500 mb-3 uppercase tracking-wider', item.type));
+                
+                const details = createElement('div', 'space-y-2 text-gray-700');
+                const priceDiv = createElement('div', 'flex justify-between items-center text-lg font-bold text-green-700');
+                priceDiv.innerHTML = `<i data-lucide="dollar-sign" class="w-5 h-5 inline mr-1"></i><span>$${formatCurrency(item.pricePerDay)} / Day</span>`;
+                details.appendChild(priceDiv);
+                details.appendChild(createElement('p', 'text-sm', `<span class="font-semibold">Owner ID:</span> ${item.ownerId}`));
+                details.appendChild(createElement('p', 'text-sm', `<span class="font-semibold">Available:</span> ${item.availabilityStartDate} to ${item.availabilityEndDate}`));
+                
+                const statusClass = item.status === 'Available' ? 'text-green-500' : 'text-red-500';
+                details.appendChild(createElement('p', `font-semibold ${statusClass}`, `Status: ${item.status}`));
+                content.appendChild(details);
+
+                if (item.status === 'Available') {
+                    const isRenterOrGuest = !state.currentUser || state.currentUser.role === 'renter';
+                    if (isRenterOrGuest) {
+                        const reserveAction = () => {
+                            if (!state.currentUser) {
+                                handleNavigate('Login', { message: "Please login to reserve equipment." });
+                            } else {
+                                handleNavigate('Reserve', { equipmentId: item.id });
+                            }
+                        };
+                        const reserveButton = renderButton('Reserve This Item', reserveAction, true, false, 'mt-4 w-full');
+                        content.appendChild(reserveButton);
+                    }
+                } else {
+                    const bookedButton = renderButton('Booked', null, false, true, 'mt-4 w-full bg-gray-200 text-gray-400 opacity-75 cursor-not-allowed hover:bg-gray-200');
+                    content.appendChild(bookedButton);
+                }
+                grid.appendChild(renderCard(item.name, 'truck', content));
+            });
+
+            container.appendChild(grid);
+            return container;
+        };
+
+        // --- VIEW 2: Add Equipment Form ---
+        const renderAddEquipmentForm = () => {
+            const formContainer = createElement('div');
+            const messageBox = createElement('div', 'hidden p-3 mb-4 rounded-lg text-sm', '');
+            formContainer.appendChild(messageBox);
+
+            const content = createElement('div');
+            content.appendChild(createElement('p', 'text-gray-600 mb-6', 'Creates a new item via <code>POST /equipment</code>'));
+
+            const form = createElement('form');
+            form.innerHTML = `
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Name *</label><input type="text" name="name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Type *</label><input type="text" name="type" required value="Tractor" class="w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Owner ID</label><input type="number" name="ownerId" required value="${state.currentUser ? state.currentUser.id : ''}" readonly class="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100"></div>
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Price Per Day ($) *</label><input type="number" name="pricePerDay" step="0.01" required class="w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Start Date *</label><input type="date" name="availabilityStartDate" required class="w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">End Date *</label><input type="date" name="availabilityEndDate" required class="w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                <div class="flex space-x-4 mt-6" id="form-actions"></div>
+            `;
+            content.appendChild(form);
+            formContainer.appendChild(content);
+
+            const submitButton = renderButton('Create Listing', null, true);
+            const cancelButton = renderButton('Cancel', () => handleNavigate('Home'), false);
+            form.querySelector('#form-actions').appendChild(submitButton);
+            form.querySelector('#form-actions').appendChild(cancelButton);
+
+            form.onsubmit = async (e) => {
+                e.preventDefault();
+                submitButton.disabled = true;
+                const formData = new FormData(form);
+                const payload = {
+                    name: formData.get('name'),
+                    ownerId: parseInt(formData.get('ownerId')),
+                    // Convert to cents for backend Long
+                    pricePerDay: Math.round(parseFloat(formData.get('pricePerDay')) * 100), 
+                    type: formData.get('type'),
+                    availabilityStartDate: formData.get('availabilityStartDate'),
+                    availabilityEndDate: formData.get('availabilityEndDate'),
+                    status: 'Available'
+                };
+                try {
+                    await createEquipment(payload);
+                    form.reset();
+                    handleNavigate('Home'); 
+                } catch (error) {
+                    messageBox.className = 'p-3 mb-4 rounded-lg text-sm bg-red-100 text-red-700';
+                    messageBox.innerHTML = `Error: ${error.message}`;
+                    messageBox.classList.remove('hidden');
+                    submitButton.disabled = false;
+                }
+            };
+            return renderCard('Add New Equipment Listing', 'truck', formContainer);
+        };
+
+        // --- VIEW 3: Reservations List ---
+        const renderReservationsList = () => {
+            const myReservations = state.reservations.filter(r => r.renterId === state.currentUser.id);
+
+            const container = createElement('div', 'space-y-6');
+            container.appendChild(createElement('h1', 'text-3xl font-bold text-gray-800', 'My Reservations'));
+            
+            const grid = createElement('div', 'grid grid-cols-1 lg:grid-cols-2 gap-6');
+            
+            if (myReservations.length === 0) {
+                container.appendChild(createElement('p', 'text-gray-500 italic', 'No reservations found.'));
+            } else {
+                myReservations.forEach(res => {
+                    const getEquipmentName = (id) => state.equipment.find(e => e.id === id)?.name || `Unknown Equipment (${id})`;
+                    const content = createElement('div');
+                    content.appendChild(createElement('p', 'text-sm text-gray-500 mb-3 tracking-wider', `Booking ID: ${res.id}`));
+                    const details = createElement('div', 'space-y-2 text-gray-700');
+                    details.appendChild(createElement('p', 'text-lg font-semibold', getEquipmentName(res.equipmentId)));
+                    details.appendChild(createElement('p', 'text-sm', `<span class="font-semibold">Period:</span> ${res.startDate} to ${res.endDate}`));
+                    
+                    let statusColor = 'text-gray-500';
+                    if(res.status === 'Confirmed') statusColor = 'text-green-600';
+                    if(res.status === 'Rejected') statusColor = 'text-red-600';
+                    if(res.status === 'Pending') statusColor = 'text-yellow-600';
+
+                    details.appendChild(createElement('p', `font-bold ${statusColor}`, `Status: ${res.status}`));
+                    content.appendChild(details);
+                    grid.appendChild(renderCard(`Booking #${res.id}`, 'calendar', content));
+                });
+                container.appendChild(grid);
+            }
+            return container;
+        };
+
+        // --- VIEW 4: Reserve Item Form ---
+        const renderReserveItemForm = () => {
+            const item = state.equipment.find(e => e.id === state.pageProps.equipmentId);
+            if (!item) return createElement('div', 'text-red-500', 'Error: Equipment not found.');
+
+            const formContainer = createElement('div');
+            const messageBox = createElement('div', 'hidden p-3 mb-4 rounded-lg text-sm', '');
+            formContainer.appendChild(messageBox);
+            
+            const content = createElement('div');
+            
+            const detailsBox = createElement('div', 'mb-4 p-4 bg-blue-50 border-l-4 border-blue-500 text-blue-800');
+            detailsBox.innerHTML = `<p><strong>Item Price:</strong> $${formatCurrency(item.pricePerDay)} / Day</p>`;
+            content.appendChild(detailsBox);
+
+            const form = createElement('form');
+            form.innerHTML = `
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Renter ID</label><input type="number" name="renterId" required value="${state.currentUser ? state.currentUser.id : ''}" readonly class="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100"></div>
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">Start Date</label><input type="date" name="startDate" required class="w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">End Date</label><input type="date" name="endDate" required class="w-full px-3 py-2 border border-gray-300 rounded-lg"></div>
+                <input type="hidden" name="equipmentId" value="${item.id}">
+                <div class="flex space-x-4 mt-6" id="reserve-form-actions"></div>
+            `;
+            content.appendChild(form);
+            formContainer.appendChild(content);
+
+            const submitButton = renderButton('Submit Reservation', null, true);
+            const cancelButton = renderButton('Cancel', () => handleNavigate('Home'), false);
+            form.querySelector('#reserve-form-actions').append(submitButton, cancelButton);
+
+            form.onsubmit = async (e) => {
+                e.preventDefault();
+                submitButton.disabled = true;
+                const formData = new FormData(form);
+                const payload = {
+                    equipmentId: parseInt(formData.get('equipmentId')),
+                    renterId: parseInt(formData.get('renterId')),
+                    startDate: formData.get('startDate'),
+                    endDate: formData.get('endDate'),
+                    status: 'Pending'
+                };
+                try {
+                    await createReservation(payload);
+                    handleNavigate('Reservations');
+                } catch (error) {
+                    messageBox.className = 'p-3 mb-4 rounded-lg text-sm bg-red-100 text-red-700';
+                    messageBox.innerHTML = `Error: ${error.message}`;
+                    messageBox.classList.remove('hidden');
+                    submitButton.disabled = false;
+                }
+            };
+            return renderCard(`Reserve: ${item.name}`, 'calendar', formContainer);
+        };
+
+        // --- VIEW 5: Admin Panel ---
+        const renderAdminPanel = () => {
+            const container = createElement('div', 'space-y-8');
+            
+            const header = createElement('div', 'bg-blue-800 text-white p-6 rounded-xl shadow-md');
+            header.innerHTML = `
+                <h1 class="text-3xl font-bold">System Administration</h1>
+                <p class="mt-1 opacity-90">Manage app-wide data. You are logged in as System Admin.</p>
+            `;
+            container.appendChild(header);
+
+            // 1. Renters Section
+            const rentersSection = createElement('div', 'bg-white rounded-xl shadow border border-gray-200 overflow-hidden');
+            rentersSection.innerHTML = `<div class="bg-gray-50 px-6 py-4 border-b border-gray-200"><h3 class="text-lg font-bold text-gray-700">All Renters (GET /renters)</h3></div>`;
+            const rTable = createElement('table', 'min-w-full divide-y divide-gray-200');
+            rTable.innerHTML = `
+                <thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th></tr></thead>
+                <tbody class="bg-white divide-y divide-gray-200">${state.users.renters.map(r => `<tr><td class="px-6 py-4 text-sm text-gray-500">${r.id}</td><td class="px-6 py-4 text-sm font-medium text-gray-900">${r.name}</td><td class="px-6 py-4 text-sm text-gray-500">${r.email}</td></tr>`).join('')}</tbody>
+            `;
+            rentersSection.appendChild(rTable);
+            container.appendChild(rentersSection);
+
+            // 2. Owners Section
+            const ownersSection = createElement('div', 'bg-white rounded-xl shadow border border-gray-200 overflow-hidden');
+            ownersSection.innerHTML = `<div class="bg-gray-50 px-6 py-4 border-b border-gray-200"><h3 class="text-lg font-bold text-gray-700">All Owners (GET /owners)</h3></div>`;
+            const oTable = createElement('table', 'min-w-full divide-y divide-gray-200');
+            oTable.innerHTML = `
+                <thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th></tr></thead>
+                <tbody class="bg-white divide-y divide-gray-200">${state.users.owners.map(o => `<tr><td class="px-6 py-4 text-sm text-gray-500">${o.id}</td><td class="px-6 py-4 text-sm font-medium text-gray-900">${o.name}</td><td class="px-6 py-4 text-sm text-gray-500">${o.email}</td></tr>`).join('')}</tbody>
+            `;
+            ownersSection.appendChild(oTable);
+            container.appendChild(ownersSection);
+
+            return container;
+        };
+
+        // --- VIEW 6: Owner Dashboard (Listings) ---
+        const renderOwnerDashboard = () => {
+            const container = createElement('div', 'space-y-6');
+            
+            const header = createElement('div', 'flex justify-between items-center');
+            header.appendChild(createElement('h1', 'text-3xl font-bold text-gray-800', 'My Equipment & Listings'));
+            const addButton = renderButton('+ Add New Listing', () => handleNavigate('AddItem'), true);
+            header.appendChild(addButton);
+            container.appendChild(header);
+
+            container.appendChild(createElement('p', 'text-gray-500', 'Manage your equipment listings and view their details.'));
+
+            const myEquipment = state.equipment.filter(e => e.ownerId === state.currentUser.id);
+
+            const grid = createElement('div', 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6');
+            
+            if (myEquipment.length === 0) {
+                container.appendChild(createElement('p', 'text-gray-500 italic', 'You have no listed equipment.'));
+            } else {
+                myEquipment.forEach(item => {
+                    const content = createElement('div');
+                    content.appendChild(createElement('p', 'text-sm text-gray-500 mb-3 uppercase tracking-wider', item.type));
+                    
+                    const details = createElement('div', 'space-y-2 text-gray-700');
+                    const priceDiv = createElement('div', 'flex justify-between items-center text-lg font-bold text-green-700');
+                    priceDiv.innerHTML = `<i data-lucide="dollar-sign" class="w-5 h-5 inline mr-1"></i><span>$${formatCurrency(item.pricePerDay)} / Day</span>`;
+                    details.appendChild(priceDiv);
+                    details.appendChild(createElement('p', 'text-sm', `<span class="font-semibold">Available:</span> ${item.availabilityStartDate} to ${item.availabilityEndDate}`));
+                    
+                    const statusClass = item.status === 'Available' ? 'text-green-500' : 'text-red-500';
+                    details.appendChild(createElement('p', `font-semibold ${statusClass}`, `Status: ${item.status}`));
+                    content.appendChild(details);
+                    
+                    grid.appendChild(renderCard(item.name, 'truck', content));
+                });
+                container.appendChild(grid);
+            }
+
+            return container;
+        };
+
+        // --- VIEW 7: Owner Requests ---
+        const renderOwnerRequests = () => {
+             const container = createElement('div', 'space-y-6');
+            
+            const header = createElement('div', 'flex justify-between items-center');
+            header.appendChild(createElement('h1', 'text-3xl font-bold text-gray-800', 'Incoming Requests'));
+            container.appendChild(header);
+
+            const myEquipmentIds = state.equipment.filter(e => e.ownerId === state.currentUser.id).map(e => e.id);
+            const myRequests = state.reservations.filter(r => myEquipmentIds.includes(r.equipmentId));
+
+            const grid = createElement('div', 'grid grid-cols-1 gap-6');
+            
+            if (myRequests.length === 0) {
+                container.appendChild(createElement('p', 'text-gray-500 italic', 'No requests found.'));
+            } else {
+                myRequests.forEach(res => {
+                    const item = state.equipment.find(e => e.id === res.equipmentId);
+                    const renter = state.users.renters.find(u => u.id === res.renterId);
+                    
+                    const content = createElement('div', 'flex flex-col md:flex-row justify-between items-start md:items-center');
+                    
+                    const info = createElement('div', 'space-y-1 mb-4 md:mb-0');
+                    info.innerHTML = `
+                        <p class="text-lg font-bold text-gray-800">${item ? item.name : 'Unknown Item'}</p>
+                        <p class="text-sm text-gray-600"><strong>Renter:</strong> ${renter ? renter.name : 'Loading...'} (${renter ? renter.email : res.renterId})</p>
+                        <p class="text-sm text-gray-600"><strong>Period:</strong> ${res.startDate} to ${res.endDate}</p>
+                        <p class="text-sm font-medium mt-1">Status: <span class="${res.status === 'Pending' ? 'text-yellow-600' : res.status === 'Confirmed' ? 'text-green-600' : 'text-red-600'}">${res.status}</span></p>
+                    `;
+                    content.appendChild(info);
+
+                    if (res.status === 'Pending') {
+                        const actionDiv = createElement('div', 'flex space-x-3');
+                        
+                        const confirmBtn = renderButton('Confirm', async () => {
+                            await updateReservationStatus(res.id, 'Confirmed');
+                            handleNavigate('OwnerRequests');
+                        }, true, false, 'bg-green-600 hover:bg-green-700 text-sm');
+                        
+                        const rejectBtn = renderButton('Reject', async () => {
+                            await updateReservationStatus(res.id, 'Rejected');
+                            handleNavigate('OwnerRequests');
+                        }, false, false, 'bg-red-100 text-red-700 hover:bg-red-200 text-sm');
+  
+                        actionDiv.appendChild(confirmBtn);
+                        actionDiv.appendChild(rejectBtn);
+                        content.appendChild(actionDiv);
+                    } else {
+                        const statusBadge = renderButton('Processed', null, false, true, 'bg-gray-100 text-gray-500 text-sm cursor-not-allowed hover:bg-gray-100');
+                        content.appendChild(statusBadge);
+                    }
+
+                    grid.appendChild(renderCard(`Request #${res.id}`, 'inbox', content));
+                });
+                container.appendChild(grid);
+            }
+
+            return container;
+        }
+
+
+        // --- MAIN RENDER FUNCTION ---
+
+        const renderNavbar = () => {
+            navbar.innerHTML = '';
+            
+            const homeButton = renderButton('Home', () => handleNavigate('Home'), 
+                ['Home', 'OwnerDashboard', 'AdminPanel', 'EquipmentList', 'LandingPage'].includes(state.currentPage) === false
+            );
+            homeButton.innerHTML = `<i data-lucide="home" class="w-4 h-4 inline mr-1"></i>Home`;
+            navbar.appendChild(homeButton);
+
+            if (state.currentUser) {
+                if (state.currentUser.role === 'renter') {
+                    const reservationsButton = renderButton(`My Reservations`, () => handleNavigate('Reservations'), state.currentPage !== 'Reservations');
+                    reservationsButton.innerHTML = `<i data-lucide="calendar" class="w-4 h-4 inline mr-1"></i>${reservationsButton.textContent}`;
+                    navbar.appendChild(reservationsButton);
+                }
+
+                if (state.currentUser.role === 'owner') {
+                    const myEqIds = state.equipment.filter(e => e.ownerId === state.currentUser.id).map(e => e.id);
+                    const pendingCount = state.reservations.filter(r => myEqIds.includes(r.equipmentId) && r.status === 'Pending').length;
+
+                    const requestsButton = renderButton(`Requests`, () => handleNavigate('OwnerRequests'), state.currentPage !== 'OwnerRequests');
+                    requestsButton.innerHTML = `<i data-lucide="inbox" class="w-4 h-4 inline mr-1"></i>Requests ${pendingCount > 0 ? `(${pendingCount})` : ''}`;
+                    navbar.appendChild(requestsButton);
+                }
+
+                if (state.currentUser.role === 'admin') {
+                     const adminButton = renderButton('Admin Panel', () => handleNavigate('AdminPanel'), state.currentPage !== 'AdminPanel');
+                     adminButton.innerHTML = `<i data-lucide="shield" class="w-4 h-4 inline mr-1"></i>Admin Panel`;
+                     navbar.appendChild(adminButton);
+                }
+
+                const logoutButton = renderButton('Logout', handleLogout, false, false, 'bg-red-100 text-red-700 hover:bg-red-200 ml-2');
+                logoutButton.innerHTML = `<i data-lucide="log-out" class="w-4 h-4 inline mr-1"></i>Logout`;
+                navbar.appendChild(logoutButton);
+                
+                const userTag = createElement('span', 'text-white text-sm ml-3 hidden md:inline-block font-medium', `Hi, ${state.currentUser.name} (${state.currentUser.role})`);
+                navbar.appendChild(userTag);
+            } else {
+                const loginButton = renderButton('Login', () => handleNavigate('Login'), state.currentPage !== 'Login', false, 'bg-white text-green-700 hover:bg-gray-100 ml-2');
+                loginButton.innerHTML = `<i data-lucide="log-in" class="w-4 h-4 inline mr-1"></i>Login`;
+                navbar.appendChild(loginButton);
+            }
+        };
+
+        const renderContent = () => {
+            mainContent.innerHTML = '';
+            
+            if (state.currentPage === 'LandingPage') {
+                heroSection.classList.remove('hidden');
+            } else {
+                heroSection.classList.add('hidden');
+            }
+
+            if (state.loading) {
+                mainContent.innerHTML = `<div class="text-center p-20 text-xl text-gray-500"><i data-lucide="zap" class="w-10 h-10 animate-spin mx-auto mb-4 text-green-500"></i><p>Connecting to Server...</p></div>`;
+                lucide.createIcons();
+                return;
+            }
+
+            let viewElement;
+            switch (state.currentPage) {
+                case 'Login': viewElement = renderLoginPage(); break;
+                case 'AddItem': viewElement = renderAddEquipmentForm(); break;
+                case 'Reservations': viewElement = renderReservationsList(); break;
+                case 'Reserve': viewElement = renderReserveItemForm(); break;
+                case 'AdminPanel': viewElement = renderAdminPanel(); break;
+                case 'OwnerDashboard': viewElement = renderOwnerDashboard(); break;
+                case 'OwnerRequests': viewElement = renderOwnerRequests(); break;
+                case 'EquipmentList': viewElement = renderEquipmentList(); break;
+                case 'LandingPage': default: viewElement = renderEquipmentList(); break;
+            }
+            mainContent.appendChild(viewElement);
+        };
+
+        const render = () => {
+            renderNavbar();
+            renderContent();
+            lucide.createIcons();
+        };
+
+        // --- INITIALIZATION ---
+        window.onload = () => {
+            // Initial load of equipment data
+            fetchEquipment();
+            if (!state.currentUser) {
+                state.currentPage = 'LandingPage';
+                render();
+            }
+        };
+
+    </script>
+</body>
+</html>

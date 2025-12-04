@@ -18,8 +18,7 @@ public class RenterServiceImpl implements RenterService {
     private final RenterRepository renterRepository;
 
     @Autowired
-    public RenterServiceImpl(RenterRepository renterRepository)
-    {
+    public RenterServiceImpl(RenterRepository renterRepository) {
 
         this.renterRepository = renterRepository;
     }
@@ -36,8 +35,8 @@ public class RenterServiceImpl implements RenterService {
 
         try {
             Renter renter = MapperUtility.sourceToTarget(renterDto, Renter.class);
-                renter = renterRepository.saveAndFlush(renter);
-                return MapperUtility.sourceToTarget(renter ,RenterDto.class);
+            renter = renterRepository.saveAndFlush(renter);
+            return MapperUtility.sourceToTarget(renter, RenterDto.class);
 
         } catch (NoSuchMethodException e) {
             throw new RuntimeException(e);
@@ -63,14 +62,14 @@ public class RenterServiceImpl implements RenterService {
 //        renterDto1.setAddress(renterDto.getAddress());
 //
 //        return renterDto1;
-         }
+    }
 
     @Override
     public RenterDto getRenterById(int id) {
         Renter renter = renterRepository.findById(id).orElseThrow();
 
         try {
-            return MapperUtility.sourceToTarget(renter ,RenterDto.class);
+            return MapperUtility.sourceToTarget(renter, RenterDto.class);
         } catch (NoSuchMethodException e) {
             throw new RuntimeException(e);
         } catch (InvocationTargetException e) {
@@ -84,7 +83,17 @@ public class RenterServiceImpl implements RenterService {
 
     @Override
     public List<RenterDto> allRenters() {
-        return List.of();
+// Fetch all renters from the database
+        List<Renter> renterList = renterRepository.findAll();
+
+        // Convert Entities to DTOs
+        return renterList.stream().map(renter -> {
+            try {
+                return MapperUtility.sourceToTarget(renter, RenterDto.class);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }).toList();
     }
 
     @Override
@@ -97,7 +106,7 @@ public class RenterServiceImpl implements RenterService {
         renter = renterRepository.saveAndFlush(renter);
 
         try {
-            return MapperUtility.sourceToTarget(renter ,RenterDto.class);
+            return MapperUtility.sourceToTarget(renter, RenterDto.class);
         } catch (NoSuchMethodException e) {
             throw new RuntimeException(e);
         } catch (InvocationTargetException e) {
